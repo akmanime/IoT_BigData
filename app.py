@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import pickle
 import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 
@@ -19,12 +21,10 @@ df = load_data()
 @st.cache_resource
 def load_model():
     try:
-        # Try joblib first (more reliable for sklearn models)
         import joblib
         return joblib.load("model_rf_building_fault.pkl")
     except Exception as e1:
         try:
-            # Try pickle with different protocols
             with open("model_rf_building_fault.pkl", "rb") as f:
                 return pickle.load(f, encoding='latin1')
         except Exception as e2:
@@ -32,7 +32,6 @@ def load_model():
                 with open("model_rf_building_fault.pkl", "rb") as f:
                     return pickle.load(f, encoding='bytes')
             except Exception as e3:
-                # Silently return None - we'll handle this in the UI
                 return None
 
 model = load_model()
@@ -44,11 +43,9 @@ st.write("Dataset Visualization + AI Fault Detection")
 # ---------------- SIDEBAR ----------------
 st.sidebar.title("⚙ Dashboard Controls")
 
-# Get numeric columns only for sensor selection
 numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
 selected_sensor = st.sidebar.selectbox("Choose sensor to visualize:", numeric_cols)
 
-# Fix: Only use numeric columns for threshold slider
 if selected_sensor in numeric_cols:
     threshold = st.sidebar.slider(
         "Alert Threshold", 
@@ -73,7 +70,6 @@ if "timestamp" in df.columns and date_filter:
 latest = df.iloc[-1]
 st.subheader("🔎 Real-Time Indicators")
 
-# Show only numeric columns in metrics
 display_cols = [col for col in numeric_cols if col != 'timestamp'][:6]
 cols = st.columns(len(display_cols))
 for i, col_name in enumerate(display_cols):
@@ -107,22 +103,6 @@ if model is not None:
         st.error(f"Error making prediction: {e}")
 else:
     st.info("ℹ️ Model file could not be loaded. The dashboard will work without AI predictions.")
-    with st.expander("📝 How to fix this"):
-        st.markdown("""
-        **To enable AI predictions, retrain and save your model:**
-        
-        ```python
-        import joblib
-        from sklearn.ensemble import RandomForestClassifier
-        
-        # Train your model
-        model = RandomForestClassifier()
-        model.fit(X_train, y_train)
-        
-        # Save with joblib (recommended)
-        joblib.dump(model, 'model_rf_building_fault.pkl')
-        ```
-        """)
 
 # ---------------- ALERT SYSTEM ----------------
 st.subheader("🚨 Sensor Alerts")
@@ -131,13 +111,65 @@ if latest[selected_sensor] > threshold:
 else:
     st.info(f"{selected_sensor.upper()} is within normal range.")
 
-# ---------------- GRAPH ----------------
-st.subheader(f"📈 {selected_sensor} Over Time")
-if "timestamp" in df.columns:
-    fig = px.line(df, x="timestamp", y=selected_sensor, title=selected_sensor)
-else:
-    fig = px.line(df, y=selected_sensor, title=selected_sensor)
-st.plotly_chart(fig, use_container_width=True)
+# ---------------- GRAPHS - ALL SENSORS ----------------
+st.subheader("📈 All Sensors Visualization")
+
+# Get all sensor columns (exclude timestamp, target, label, fault)
+sensor_cols = [col for col in numeric_cols if col not in ['timestamp', 'target', 'label', 'fault']]
+
+# Create tabs for different views
+tab1, tab2, tab3 = st.tabs(["📊 Individual Charts", "📈 Combined View", "🔍 Selected Sensor"])
+
+with tab1:
+    # Create 2 columns for better layout
+    col1, col2 = st.columns(2)
+    
+    for idx, sensor in enumerate(sensor_cols):
+        with col1 if idx % 2 == 0 else col2:
+            if "timestamp" in df.columns:
+                fig = px.line(df, x="timestamp", y=sensor, title=f"{sensor.upper()}")
+            else:
+                fig = px.line(df, y=sensor, title=f"{sensor.upper()}")
+            
+            fig.update_layout(height=300, margin=dict(l=20, r=20, t=40, b=20))
+            st.plotly_chart(fig, use_container_width=True)
+
+with tab2:
+    # Create subplots for all sensors
+    rows = (len(sensor_cols) + 1) // 2
+    fig = make_subplots(
+        rows=rows, cols=2,
+        subplot_titles=[s.upper() for s in sensor_cols],
+        vertical_spacing=0.1,
+        horizontal_spacing=0.1
+    )
+    
+    for idx, sensor in enumerate(sensor_cols):
+        row = idx // 2 + 1
+        col = idx % 2 + 1
+        
+        if "timestamp" in df.columns:
+            fig.add_trace(
+                go.Scatter(x=df["timestamp"], y=df[sensor], name=sensor, mode='lines'),
+                row=row, col=col
+            )
+        else:
+            fig.add_trace(
+                go.Scatter(y=df[sensor], name=sensor, mode='lines'),
+                row=row, col=col
+            )
+    
+    fig.update_layout(height=300*rows, showlegend=False)
+    st.plotly_chart(fig, use_container_width=True)
+
+with tab3:
+    if "timestamp" in df.columns:
+        fig = px.line(df, x="timestamp", y=selected_sensor, title=f"{selected_sensor.upper()} Over Time")
+    else:
+        fig = px.line(df, y=selected_sensor, title=f"{selected_sensor.upper()} Over Time")
+    
+    fig.update_layout(height=400)
+    st.plotly_chart(fig, use_container_width=True)
 
 # ---------------- STATUS PANEL ----------------
 st.subheader("📊 System Health")
@@ -150,49 +182,43 @@ health = {
 }
 st.table(pd.DataFrame.from_dict(health, orient="index", columns=["Status"]))
 
-# ---------------- TEST NEW VALUES ----------------
+# ---------------- TEST NEW VALUES - OPTIMIZED ----------------
 st.subheader("🧪 Test de Nouvelles Valeurs")
 
-col1, col2 = st.columns([2, 1])
+# Create compact input layout - 4 columns
+st.write("**Entrez des valeurs personnalisées pour tester le système:**")
+test_cols = st.columns(4)
+test_values = {}
 
-with col1:
-    st.write("**Entrez des valeurs personnalisées pour tester le système:**")
-    
-    # Create input fields for each sensor
-    test_cols = st.columns(3)
-    test_values = {}
-    
-    # Get all numeric columns except timestamp
-    sensor_cols = [col for col in numeric_cols if col not in ['timestamp', 'target', 'label', 'fault']]
-    
-    for idx, sensor in enumerate(sensor_cols):
-        col_idx = idx % 3
-        with test_cols[col_idx]:
-            # Get default value from latest data
-            default_val = float(latest.get(sensor, df[sensor].mean()))
-            min_val = float(df[sensor].min())
-            max_val = float(df[sensor].max())
-            
-            test_values[sensor] = st.number_input(
-                f"{sensor}",
-                min_value=min_val * 0.5,  # Allow 50% below min
-                max_value=max_val * 1.5,  # Allow 50% above max
-                value=default_val,
-                step=(max_val - min_val) / 100,
-                key=f"test_{sensor}"
-            )
+for idx, sensor in enumerate(sensor_cols):
+    col_idx = idx % 4
+    with test_cols[col_idx]:
+        # Get default value from latest data
+        default_val = float(latest.get(sensor, df[sensor].mean()))
+        min_val = float(df[sensor].min())
+        max_val = float(df[sensor].max())
+        
+        test_values[sensor] = st.number_input(
+            f"{sensor}",
+            min_value=min_val * 0.5,  # Allow 50% below min
+            max_value=max_val * 1.5,  # Allow 50% above max
+            value=default_val,
+            step=(max_val - min_val) / 100,
+            key=f"test_{sensor}"
+        )
 
-with col2:
-    st.write("**Actions:**")
-    
-    if st.button("🔄 Réinitialiser aux valeurs actuelles", use_container_width=True):
+# Action buttons
+col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 2])
+with col_btn1:
+    if st.button("🔄 Réinitialiser", use_container_width=True):
         st.rerun()
-    
-    if st.button("📊 Utiliser les valeurs moyennes", use_container_width=True):
+with col_btn2:
+    if st.button("📊 Moyennes", use_container_width=True):
         st.rerun()
 
-# Display test results
 st.write("---")
+
+# Results in 2 columns
 col_result1, col_result2 = st.columns(2)
 
 with col_result1:
@@ -220,7 +246,7 @@ with col_result2:
     
     if model is not None:
         try:
-            # Create DataFrame from test values
+            # Create DataFrame from test values - exactly like your working code
             test_df = pd.DataFrame([test_values])
             
             # Make prediction
